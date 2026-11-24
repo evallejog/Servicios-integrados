@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- POM agregador: permite compilar y probar los cinco microservicios con un solo comando (mvn verify). -->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.serviciosintegrados</groupId>
+    <artifactId>servicios-integrados</artifactId>
+    <version>1.0.0</version>
+    <packaging>pom</packaging>
+    <name>servicios-integrados</name>
+
+    <modules>
+        <module>microservicio-clientes</module>
+        <module>microservicio-productos</module>
+        <module>microservicio-inventario</module>
+        <module>microservicio-ventas</module>
+        <module>microservicio-facturacion</module>
+    </modules>
+</project>

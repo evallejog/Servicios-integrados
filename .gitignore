@@ -1,0 +1,21 @@
+# Compilación
+target/
+dist/
+node_modules/
+
+# IDEs
+.idea/
+.vscode/
+*.iml
+.classpath
+.project
+.settings/
+nbproject/
+
+# Secretos y configuración local
+.env
+kubernetes/secret.yaml
+
+# Sistema operativo
+.DS_Store
+Thumbs.db

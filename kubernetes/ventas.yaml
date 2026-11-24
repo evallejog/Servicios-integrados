@@ -1,0 +1,111 @@
+# Microservicio de ventas. Las variables ${NAMESPACE}, ${ACR_LOGIN_SERVER} e ${IMAGE_TAG}
+# se reemplazan con envsubst (ver scripts/deploy.sh).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ventas
+  namespace: ${NAMESPACE}
+  labels:
+    app: ventas
+    app.kubernetes.io/part-of: servicios-integrados
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: ventas
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app: ventas
+        app.kubernetes.io/part-of: servicios-integrados
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: ventas
+          image: ${ACR_LOGIN_SERVER}/ventas:${IMAGE_TAG}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: SPRING_PROFILES_ACTIVE
+              value: prod
+            - name: DB_URL
+              value: jdbc:postgresql://postgres:5432/ventas_db
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: db-credentials
+                  key: POSTGRES_USER
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: db-credentials
+                  key: POSTGRES_PASSWORD
+            - name: SERVICIOS_CLIENTES_URL
+              value: http://clientes
+            - name: SERVICIOS_PRODUCTOS_URL
+              value: http://productos
+            - name: SERVICIOS_INVENTARIO_URL
+              value: http://inventario
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          startupProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: http
+            periodSeconds: 5
+            failureThreshold: 36
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: http
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: http
+            periodSeconds: 15
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ventas
+  namespace: ${NAMESPACE}
+  labels:
+    app: ventas
+spec:
+  type: ClusterIP
+  selector:
+    app: ventas
+  ports:
+    - name: http
+      port: 80
+      targetPort: http

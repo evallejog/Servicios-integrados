@@ -1,0 +1,41 @@
+# Plantilla procesada al arrancar el contenedor (las variables ${...} salen del entorno).
+# Este nginx cumple dos funciones: servir la SPA y actuar como gateway hacia los microservicios.
+server {
+    listen 8080;
+    server_name _;
+
+    root /usr/share/nginx/html;
+    index index.html;
+
+    gzip on;
+    gzip_types text/css application/javascript application/json image/svg+xml;
+
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_connect_timeout 5s;
+    proxy_read_timeout 30s;
+
+    location /api/clientes   { proxy_pass ${CLIENTES_URL}; }
+    location /api/productos  { proxy_pass ${PRODUCTOS_URL}; }
+    location /api/inventario { proxy_pass ${INVENTARIO_URL}; }
+    location /api/ventas     { proxy_pass ${VENTAS_URL}; }
+    location /api/facturas   { proxy_pass ${FACTURACION_URL}; }
+
+    location = /healthz {
+        access_log off;
+        default_type text/plain;
+        return 200 "ok";
+    }
+
+    location /assets/ {
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+    }
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}

@@ -1,0 +1,210 @@
+# Pipeline CI/CD de Servicios Integrados S.A.S. (Azure DevOps)
+#
+# Flujo: compilar y probar -> construir, analizar y publicar imágenes en ACR -> desplegar en AKS (dev) -> desplegar en AKS (prod, con aprobación)
+# Configuración previa: ver sección "Pipeline en Azure DevOps" del README.
+
+trigger:
+  branches:
+    include:
+      - main
+      - develop
+
+pr:
+  branches:
+    include:
+      - main
+      - develop
+
+variables:
+  # --- Ajustar a tu organización de Azure DevOps y a tu suscripción ---
+  azureServiceConnection: 'sc-azure'     # Service connection tipo "Azure Resource Manager"
+  acrServiceConnection: 'sc-acr'         # Service connection tipo "Docker Registry" apuntando al ACR
+  acrLoginServer: 'acrserviciosintegrados.azurecr.io'
+  resourceGroup: 'rg-ServiciosIntegrados'
+  aksName: 'aks-ServiciosIntegrados'
+  # --------------------------------------------------------------------
+  imageTag: '$(Build.BuildId)'
+  MAVEN_CACHE_FOLDER: $(Pipeline.Workspace)/.m2/repository
+  MAVEN_OPTS: '-Dmaven.repo.local=$(MAVEN_CACHE_FOLDER)'
+
+pool:
+  vmImage: ubuntu-latest
+
+stages:
+  # ==================================================================
+  # CI: compilar, probar y construir imágenes
+  # ==================================================================
+  - stage: Build
+    displayName: 'Compilar, probar y publicar imágenes'
+    jobs:
+      - job: Backend
+        displayName: 'Microservicio'
+        strategy:
+          matrix:
+            clientes:
+              servicio: clientes
+            productos:
+              servicio: productos
+            inventario:
+              servicio: inventario
+            ventas:
+              servicio: ventas
+            facturacion:
+              servicio: facturacion
+        steps:
+          - task: JavaToolInstaller@0
+            displayName: 'Java 21'
+            inputs:
+              versionSpec: '21'
+              jdkArchitectureOption: 'x64'
+              jdkSourceOption: 'PreInstalled'
+
+          - task: Cache@2
+            displayName: 'Caché de Maven'
+            inputs:
+              key: 'maven | "$(Agent.OS)" | microservicio-$(servicio)/pom.xml'
+              restoreKeys: |
+                maven | "$(Agent.OS)"
+              path: $(MAVEN_CACHE_FOLDER)
+
+          - script: mvn -B -ntp clean verify
+            displayName: 'Compilar y ejecutar pruebas'
+            workingDirectory: microservicio-$(servicio)
+
+          - task: PublishTestResults@2
+            displayName: 'Publicar resultados de pruebas'
+            condition: succeededOrFailed()
+            inputs:
+              testResultsFormat: 'JUnit'
+              testResultsFiles: 'microservicio-$(servicio)/target/surefire-reports/TEST-*.xml'
+              testRunTitle: '$(servicio)'
+
+          - task: Docker@2
+            displayName: 'Construir imagen'
+            condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'))
+            inputs:
+              command: build
+              containerRegistry: $(acrServiceConnection)
+              repository: $(servicio)
+              Dockerfile: microservicio-$(servicio)/Dockerfile
+              buildContext: microservicio-$(servicio)
+              tags: |
+                $(imageTag)
+                latest
+
+          # Análisis de vulnerabilidades. Es informativo (exit-code 0); cambia a 1 para bloquear el pipeline.
+          - script: |
+              docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+                aquasec/trivy:latest image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 0 \
+                $(acrLoginServer)/$(servicio):$(imageTag)
+            displayName: 'Análisis de vulnerabilidades (Trivy)'
+            condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'))
+
+          - task: Docker@2
+            displayName: 'Publicar imagen en ACR'
+            condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'))
+            inputs:
+              command: push
+              containerRegistry: $(acrServiceConnection)
+              repository: $(servicio)
+              tags: |
+                $(imageTag)
+                latest
+
+      - job: Frontend
+        displayName: 'Frontend'
+        steps:
+          - task: NodeTool@0
+            displayName: 'Node.js 22'
+            inputs:
+              versionSpec: '22.x'
+
+          - script: npm ci && npm run build
+            displayName: 'Instalar dependencias y compilar'
+            workingDirectory: frontend
+
+          - task: Docker@2
+            displayName: 'Construir imagen'
+            condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'))
+            inputs:
+              command: build
+              containerRegistry: $(acrServiceConnection)
+              repository: frontend
+              Dockerfile: frontend/Dockerfile
+              buildContext: frontend
+              tags: |
+                $(imageTag)
+                latest
+
+          - task: Docker@2
+            displayName: 'Publicar imagen en ACR'
+            condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'))
+            inputs:
+              command: push
+              containerRegistry: $(acrServiceConnection)
+              repository: frontend
+              tags: |
+                $(imageTag)
+                latest
+
+  # ==================================================================
+  # CD - Desarrollo (ramas main y develop)
+  # ==================================================================
+  - stage: Deploy_Dev
+    displayName: 'Despliegue en desarrollo'
+    dependsOn: Build
+    condition: >-
+      and(succeeded(),
+          ne(variables['Build.Reason'], 'PullRequest'),
+          or(eq(variables['Build.SourceBranch'], 'refs/heads/main'),
+             eq(variables['Build.SourceBranch'], 'refs/heads/develop')))
+    jobs:
+      - deployment: DesplegarDev
+        displayName: 'Desplegar en AKS (dev)'
+        environment: 'servicios-integrados-dev'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+                - task: AzureCLI@2
+                  displayName: 'Aplicar manifiestos en AKS'
+                  inputs:
+                    azureSubscription: $(azureServiceConnection)
+                    scriptType: bash
+                    scriptLocation: inlineScript
+                    inlineScript: |
+                      set -euo pipefail
+                      az aks get-credentials --resource-group "$(resourceGroup)" --name "$(aksName)" --overwrite-existing
+                      # Dev y prod comparten clúster y no hay dominio: el Ingress público es solo de prod.
+                      # Para ver dev: kubectl -n servicios-integrados-dev port-forward svc/frontend 8080:80
+                      ACR_LOGIN_SERVER="$(acrLoginServer)" IMAGE_TAG="$(imageTag)" APLICAR_INGRESS=false \
+                        ./scripts/deploy.sh servicios-integrados-dev
+
+  # ==================================================================
+  # CD - Producción (solo main). Configura aprobaciones en el environment.
+  # ==================================================================
+  - stage: Deploy_Prod
+    displayName: 'Despliegue en producción'
+    dependsOn: Deploy_Dev
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+    jobs:
+      - deployment: DesplegarProd
+        displayName: 'Desplegar en AKS (prod)'
+        environment: 'servicios-integrados-prod'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+                - task: AzureCLI@2
+                  displayName: 'Aplicar manifiestos en AKS'
+                  inputs:
+                    azureSubscription: $(azureServiceConnection)
+                    scriptType: bash
+                    scriptLocation: inlineScript
+                    inlineScript: |
+                      set -euo pipefail
+                      az aks get-credentials --resource-group "$(resourceGroup)" --name "$(aksName)" --overwrite-existing
+                      ACR_LOGIN_SERVER="$(acrLoginServer)" IMAGE_TAG="$(imageTag)" \
+                        ./scripts/deploy.sh servicios-integrados

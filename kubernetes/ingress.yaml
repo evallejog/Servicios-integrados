@@ -1,0 +1,19 @@
+# Entrada pública. Usa el complemento "Application Routing" de AKS (az aks approuting enable).
+# Para HTTPS agrega una sección tls con un certificado (por ejemplo, desde Azure Key Vault).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: servicios-integrados
+  namespace: ${NAMESPACE}
+spec:
+  ingressClassName: webapprouting.kubernetes.azure.com
+  rules:
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: frontend
+                port:
+                  name: http

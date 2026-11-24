@@ -1,0 +1,42 @@
+# OPCIONAL. Solo tiene efecto si el clúster se creó con un motor de políticas de red habilitado.
+# Aplica con:  envsubst '${NAMESPACE}' < kubernetes/opcional/network-policies.yaml | kubectl apply -f -
+#
+# 1) Bloquea todo el tráfico entrante por defecto.
+# 2) Permite el tráfico entre los pods del mismo namespace (frontend -> servicios -> base de datos).
+# 3) Permite que el controlador de Ingress de AKS llegue al frontend.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: denegar-todo-entrante
+  namespace: ${NAMESPACE}
+spec:
+  podSelector: {}
+  policyTypes: ["Ingress"]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: permitir-mismo-namespace
+  namespace: ${NAMESPACE}
+spec:
+  podSelector: {}
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector: {}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: permitir-ingress-hacia-frontend
+  namespace: ${NAMESPACE}
+spec:
+  podSelector:
+    matchLabels:
+      app: frontend
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: app-routing-system
